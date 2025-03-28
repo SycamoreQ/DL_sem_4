@@ -1,7 +1,3 @@
-
-# 2024.07.26 -- Changed for building SViG 
-
-# Adapted from https://github.com/huawei-noah/Efficient-AI-Backbones/tree/master/vig_pytorch
 import numpy as np
 import torch
 from torch import nn
