@@ -5,8 +5,9 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch import nn 
 from torch import optim
-from models import Combined , final
+from models import final , Combined_2
 from train_eval import train_model , evaluate_model
+
 
 def create_graph_data(features, labels=None):
     num_nodes = features.size(0)
@@ -25,7 +26,7 @@ transform = transforms.Compose([
 ])
 
 # Load the data
-datadir = 'C:/Users/aspri/OneDrive/Desktop/college resources/ML DL SHITE/datasets/brain_tumor_dataset/brain_tumor_dataset'
+datadir = 'C:/Users/admin/Desktop/DL_sem_4/brain_tumor_dataset'
 dataset = ImageFolder(datadir, transform=transform)
 
 dataset_size = len(dataset)
@@ -37,20 +38,21 @@ train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
     dataset, [train_size, val_size, test_size]
 )
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model_1 = Combined(num_classes=2)
 model_2 = final(num_classes=2)
+model_3 = Combined_2(num_classes=2)
+
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model_2.parameters(), lr=0.001)  
 
 
-model , history = train_model(train_loader=train_loader , val_loader=val_loader , model=model_2 , criterion=criterion , optimizer=optimizer , num_epochs=10 , device=device)
+model , history = train_model(train_loader=train_loader , val_loader=val_loader , model=model_3 , criterion=criterion , optimizer=optimizer , num_epochs=10 , device=device)
 
 
 

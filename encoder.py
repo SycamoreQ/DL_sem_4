@@ -3,11 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from einops import rearrange, repeat
+import numpy as np
 
 class LaplacianPositionalEncoding(nn.Module):
-    """
-    Laplacian eigenvector-based positional encoding for image patches
-    """
     def __init__(self, patch_size, img_size, dim, normalized=True):
         super().__init__()
         self.patch_size = patch_size
@@ -15,103 +13,94 @@ class LaplacianPositionalEncoding(nn.Module):
         self.dim = dim
         self.normalized = normalized
         
-        # Calculate grid size based on image size and patch size
+        # Calculate grid size
         self.grid_h = img_size // patch_size
         self.grid_w = img_size // patch_size
         self.num_patches = self.grid_h * self.grid_w
         
-        # Pre-compute the Laplacian eigenvalues and eigenvectors
-        self.compute_laplacian_eigenvectors()
+        # Initialize projection layer properly
+        self.projection = nn.Linear(min(self.num_patches, dim), dim)
         
-        # Trainable projection layer
-        self.projection = nn.Linear(self.num_patches, dim)
+        # Compute Laplacian (moved to forward to handle dynamic sizes)
+        self.register_buffer('edge_index', self.create_edge_index())
         
-    def compute_laplacian_eigenvectors(self):
-        """
-        Compute the Laplacian eigenvalues and eigenvectors for a 2D grid graph
-        representing the patch structure of the image
-        """
-        # Create adjacency matrix for a 2D grid graph
-        adj_matrix = torch.zeros(self.num_patches, self.num_patches)
+        # Create static Laplacian matrix to avoid recalculation
+        adj = self.create_adjacency_matrix()
+        degree = torch.diag(adj.sum(dim=1))
+        laplacian = degree - adj
         
-        # Connect adjacent patches (4-neighborhood)
+        # Pre-compute eigenvectors for efficiency
+        eigvals, eigvecs = torch.linalg.eigh(laplacian)
+        k = min(self.num_patches, self.dim)
+        basis = eigvecs[:, :k]  # [N, k]
+        
+        # Normalize if needed
+        if self.normalized:
+            weights = 1.0 / torch.sqrt(eigvals[:k] + 1e-6)
+            weights[0] = 0  # Ignore constant eigenvector
+            basis = basis * weights.unsqueeze(0)
+        
+        # Project to embedding dimension
+        pos_emb = self.projection(basis)  # [N, dim]
+        
+        # Register as buffer
+        self.register_buffer('pos_emb', pos_emb)
+        
+    def create_edge_index(self):
+        """Create edge connections for the grid"""
+        edge_index = []
         for i in range(self.grid_h):
             for j in range(self.grid_w):
                 node = i * self.grid_w + j
-                
-                # Up connection
-                if i > 0:
-                    adj_matrix[node, (i-1) * self.grid_w + j] = 1
-                
-                # Down connection
-                if i < self.grid_h - 1:
-                    adj_matrix[node, (i+1) * self.grid_w + j] = 1
-                
-                # Left connection
-                if j > 0:
-                    adj_matrix[node, i * self.grid_w + (j-1)] = 1
-                
-                # Right connection
-                if j < self.grid_w - 1:
-                    adj_matrix[node, i * self.grid_w + (j+1)] = 1
-        
-        # Compute degree matrix
-        degree_matrix = torch.diag(adj_matrix.sum(dim=1))
-        
-        # Compute Laplacian matrix
-        laplacian = degree_matrix - adj_matrix
-        
-        # Compute eigenvalues and eigenvectors
-        eigenvalues, eigenvectors = torch.linalg.eigh(laplacian)
-        
-        # Store the eigenvectors and edge indices
-        self.register_buffer('eigenvectors', eigenvectors)
-        self.register_buffer('eigenvalues', eigenvalues)
-        
-        # Create and store edge_index for GCN
-        edge_index = []
-        for i in range(self.num_patches):
-            for j in range(self.num_patches):
-                if adj_matrix[i, j] > 0:
-                    edge_index.append([i, j])
-        
-        edge_index = torch.tensor(edge_index).t()
-        self.register_buffer('edge_index', edge_index)
+                if i > 0: edge_index.append([node, (i-1)*self.grid_w + j])
+                if j > 0: edge_index.append([node, i*self.grid_w + (j-1)])
+                if i < self.grid_h - 1: edge_index.append([node, (i+1)*self.grid_w + j])
+                if j < self.grid_w - 1: edge_index.append([node, i*self.grid_w + (j+1)])
+        return torch.tensor(edge_index).t()
     
-    def forward(self, batch_size):
-        """
-        Generate Laplacian positional embeddings for each position in the grid
-        """
-        # Use top-k eigenvectors as the positional encoding basis
-        k = min(self.num_patches, self.dim)
-        laplacian_basis = self.eigenvectors[:, :k]
-        
-        if self.normalized:
-            # Weight eigenvectors by the inverse square root of eigenvalues
-            # (adding small epsilon to avoid division by zero)
-            epsilon = 1e-6
-            weights = 1.0 / torch.sqrt(self.eigenvalues[:k] + epsilon)
-            
-            # Zero out the weight for the first eigenvector (constant)
-            weights[0] = 0
-            
-            # Apply weights to the eigenvectors
-            scaled_basis = laplacian_basis * weights.unsqueeze(0)
-        else:
-            scaled_basis = laplacian_basis
-        
-        # Project to the desired embedding dimension
-        if k < self.dim:
-            positional_embedding = self.projection(scaled_basis)
-        else:
-            positional_embedding = scaled_basis
-        
-        # Repeat for each item in the batch
-        positional_embedding = repeat(positional_embedding, 'n d -> b n d', b=batch_size)
-        
-        return positional_embedding, self.edge_index
-
+    def create_adjacency_matrix(self):
+        """Create adjacency matrix from edge index"""
+        adj = torch.zeros(self.num_patches, self.num_patches)
+        for i in range(self.edge_index.size(1)):
+            src, dst = self.edge_index[0, i], self.edge_index[1, i]
+            adj[src, dst] = 1
+            adj[dst, src] = 1  # Ensure symmetry
+        return adj
     
+    def forward(self, x):
+        """
+        Args:
+            x: Input tensor of shape [B, N, C] where N is num_patches
+                or [B, C, H, W] for image input
+        Returns:
+            x: Input with positional encoding added
+        """
+        # Handle different input formats
+        if len(x.shape) == 4:
+            B, C, H, W = x.shape
+            # Convert image to patches if needed
+            assert H == self.grid_h and W == self.grid_w, \
+                f"Input size {H}x{W} doesn't match expected {self.grid_h}x{self.grid_w}"
+            x = x.flatten(2).transpose(1, 2)  # [B, H*W, C]
+        else:
+            B, N, C = x.shape
+            assert N == self.num_patches, f"Expected {self.num_patches} patches, got {N}"
+        
+        # Add positional embeddings to input
+        pos_emb = self.pos_emb.unsqueeze(0).expand(B, -1, -1)  # [B, N, dim]
+        
+        # Handle dimension mismatch if necessary
+        if C != self.dim:
+            # Option 1: Project pos_emb to match C
+            if C < self.dim:
+                pos_emb = pos_emb[:, :, :C]
+            else:  # C > self.dim
+                pos_emb = F.pad(pos_emb, (0, C - self.dim))
+        
+        # Add positional embeddings to input
+        x = x + pos_emb
+        
+        return x
 
 class PatchEmbed(nn.Module):
     """
@@ -140,6 +129,7 @@ class PatchEmbed(nn.Module):
         x = self.proj(x)
         x = self.conv_down(x)
         return x
+
     
 
 class ConditionalPositionEncoding(nn.Module):
@@ -162,3 +152,87 @@ class ConditionalPositionEncoding(nn.Module):
     def forward(self, x):
         x = self.pe(x) + x
         return x
+
+# 2022.06.17-Changed for building ViG model
+#            Huawei Technologies Co., Ltd. <foss@huawei.com>
+# modified from https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+# --------------------------------------------------------
+# Position embedding utils
+# --------------------------------------------------------
+
+
+
+# --------------------------------------------------------
+# relative position embedding
+# References: https://arxiv.org/abs/2009.13658
+# --------------------------------------------------------
+def get_2d_relative_pos_embed(embed_dim, grid_size):
+    """
+    grid_size: int of the grid height and width
+    return:
+    pos_embed: [grid_size*grid_size, grid_size*grid_size]
+    """
+    pos_embed = get_2d_sincos_pos_embed(embed_dim, grid_size)
+    relative_pos = 2 * np.matmul(pos_embed, pos_embed.transpose()) / pos_embed.shape[1]
+    return relative_pos
+
+
+# --------------------------------------------------------
+# 2D sine-cosine position embedding
+# References:
+# Transformer: https://github.com/tensorflow/models/blob/master/official/nlp/transformer/model_utils.py
+# MoCo v3: https://github.com/facebookresearch/moco-v3
+# --------------------------------------------------------
+def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
+    """
+    grid_size: int of the grid height and width
+    return:
+    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    """
+    grid_h = np.arange(grid_size, dtype=np.float32)
+    grid_w = np.arange(grid_size, dtype=np.float32)
+    grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+    grid = np.stack(grid, axis=0)
+
+    grid = grid.reshape([2, 1, grid_size, grid_size])
+    pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+    if cls_token:
+        pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
+
+def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
+    assert embed_dim % 2 == 0
+
+    # use half of dimensions to encode grid_h
+    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
+    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
+
+    emb = np.concatenate([emb_h, emb_w], axis=1) # (H*W, D)
+    return emb
+
+
+def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+    """
+    embed_dim: output dimension for each position
+    pos: a list of positions to be encoded: size (M,)
+    out: (M, D)
+    """
+    assert embed_dim % 2 == 0
+    omega = np.arange(embed_dim // 2, dtype=np.float)
+    omega /= embed_dim / 2.
+    omega = 1. / 10000**omega  # (D/2,)
+
+    pos = pos.reshape(-1)  # (M,)
+    out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+
+    emb_sin = np.sin(out) # (M, D/2)
+    emb_cos = np.cos(out) # (M, D/2)
+
+    emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
+    return emb
