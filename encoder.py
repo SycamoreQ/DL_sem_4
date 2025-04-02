@@ -34,16 +34,13 @@ class LaplacianPositionalEncoding(nn.Module):
         k = min(self.num_patches, self.dim)
         basis = eigvecs[:, :k]  # [N, k]
         
-        # Normalize if needed
         if self.normalized:
             weights = 1.0 / torch.sqrt(eigvals[:k] + 1e-6)
-            weights[0] = 0  # Ignore constant eigenvector
+            weights[0] = 0  
             basis = basis * weights.unsqueeze(0)
         
-        # Project to embedding dimension
         pos_emb = self.projection(basis)  # [N, dim]
         
-        # Register as buffer
         self.register_buffer('pos_emb', pos_emb)
         
     def create_edge_index(self):
@@ -64,7 +61,7 @@ class LaplacianPositionalEncoding(nn.Module):
         for i in range(self.edge_index.size(1)):
             src, dst = self.edge_index[0, i], self.edge_index[1, i]
             adj[src, dst] = 1
-            adj[dst, src] = 1  # Ensure symmetry
+            adj[dst, src] = 1  
         return adj
     
     def forward(self, x):
@@ -75,10 +72,8 @@ class LaplacianPositionalEncoding(nn.Module):
         Returns:
             x: Input with positional encoding added
         """
-        # Handle different input formats
         if len(x.shape) == 4:
             B, C, H, W = x.shape
-            # Convert image to patches if needed
             assert H == self.grid_h and W == self.grid_w, \
                 f"Input size {H}x{W} doesn't match expected {self.grid_h}x{self.grid_w}"
             x = x.flatten(2).transpose(1, 2)  # [B, H*W, C]
@@ -86,18 +81,14 @@ class LaplacianPositionalEncoding(nn.Module):
             B, N, C = x.shape
             assert N == self.num_patches, f"Expected {self.num_patches} patches, got {N}"
         
-        # Add positional embeddings to input
         pos_emb = self.pos_emb.unsqueeze(0).expand(B, -1, -1)  # [B, N, dim]
         
-        # Handle dimension mismatch if necessary
         if C != self.dim:
-            # Option 1: Project pos_emb to match C
             if C < self.dim:
                 pos_emb = pos_emb[:, :, :C]
-            else:  # C > self.dim
+            else: 
                 pos_emb = F.pad(pos_emb, (0, C - self.dim))
         
-        # Add positional embeddings to input
         x = x + pos_emb
         
         return x

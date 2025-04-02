@@ -112,38 +112,53 @@ class Model_1(nn.Module):
     
 
 class Model_2(nn.Module):
-    def __init__(self , num_classes , embed_dim = 96 , depth = 12 , num_heads = 4 , mlp_ratio = 4.0 , dropout = 0.1):
-        super(Model_2 , self).__init__()
+    def __init__(self, num_classes, embed_dim=96, depth=12, num_heads=4, mlp_ratio=4.0, dropout=0.1):
+        super(Model_2, self).__init__()
         self.num_classes = num_classes
-        self.laplacian = LaplacianPositionalEncoding(patch_size=4 , img_size = 224 , dim = embed_dim , normalized = True)
-
+        
+        # Patch embedding
+        self.patch_embed = PatchEmbed()
+        
+        # Grapher module (operates on spatial data)
+        # Make sure in_channels matches the output channels from patch_embed
+        self.grapher = Grapher(in_channels=embed_dim)  # Adjust channels to match patch_embed output
+        
+        # Positional encoding for transformer
+        self.laplacian = LaplacianPositionalEncoding(patch_size=4, img_size=224, dim=embed_dim, normalized=True)
+        
+        # Transformer blocks
         self.blocks = nn.ModuleList([
             TransformerBlock(embed_dim, num_heads, mlp_ratio, dropout)
             for _ in range(depth)
         ])
         
-
-        self.patch_embed = PatchEmbed()
-        self.fc = nn.Linear(embed_dim, num_classes)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.grapher = Grapher(in_channels = 3)
+        self.fc = nn.Linear(embed_dim, num_classes)
         
-    def forward(self , x):
+    def forward(self, x):
         B = x.shape[0]
+        
+        # 1. Patch embedding [B, C, H, W]
         x = self.patch_embed(x)
-
-        _ , C , H , W  = x.shape
-
+        
+        # 2. Apply Grapher while still in spatial format
+        x = self.grapher(x)
+        
+        # 3. Reshape to sequence format for transformer
+        _, C, H, W = x.shape
         x = x.flatten(2).transpose(1, 2)  # [B, N, C]
         
+        # 4. Apply positional encoding
         x = self.laplacian(x)
-
+        
+        # 5. Process through transformer blocks
         for block in self.blocks:
             x = block(x)
-
-        print(f"Shape after transformer blocks: {x.shape}")
-
-        x = self.grapher(x)
+        
+        # Use mean pooling instead of CLS token for classification
+        x = x.mean(dim=1)  # [B, C]
+        
+        # Classification
         x = self.fc(x)
         return x
 
@@ -162,22 +177,3 @@ class Combined_2(nn.Module):
         x = self.fc(x)
         return x
     
-
-class final(nn.Module):
-    def __init__(self , num_classes = 2):
-        super(final , self).__init__()
-        self.combined_1 = Model_2(num_classes = num_classes)
-        self.combined_2 = Combined_2(num_classes=num_classes)
-        self.fc = nn.Linear(2*num_classes , num_classes)
-
-    def forward(self , x):
-        # Add this at the start of your forward pass:
-        print(f"Input shape: {x.shape}")
-        x1 = self.combined_1(x)
-        print(f"Model_2 output shape: {x1.shape}")
-        x2 = self.combined_2(x)
-        print(f"Combined_2 output shape: {x2.shape}")
-
-        x = self.fc(torch.cat((x1, x2), dim=1)) #x1.shape = 3 , x2.shape = 2 for some reason 
-
-        return x.log_softmax(x)
