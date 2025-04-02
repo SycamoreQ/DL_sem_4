@@ -9,7 +9,7 @@ from torch_geometric.nn import SAGEConv , GATConv , GCNConv
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 from encoder import PatchEmbed , LaplacianPositionalEncoding , ConditionalPositionEncoding
 from Grapher import Grapher
-
+from torch_geometric.nn import GPSConv
 
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout=0.0):
@@ -176,4 +176,14 @@ class Combined_2(nn.Module):
         x = x.mean(dim = [2 , 3])
         x = self.fc(x)
         return x
+    
+class opt(nn.Module):
+    def __init__(self , num_classes , embed_dim = 96 , depth = 12 , num_heads = 4 , mlp_ratio = 4.0 , dropout = 0.1 , gps_layers = 2 , k =4):
+        super(opt , self).__init__()
+        self.num_classes = num_classes
+        self.embed_dim = embed_dim
+        self.path_embed = PatchEmbed()
+        self.laplacian = LaplacianPositionalEncoding(patch_size = 4 , img_size = 224 , dim = embed_dim , normalized = True)
+
+        
     
