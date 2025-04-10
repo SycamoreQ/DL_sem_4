@@ -51,7 +51,6 @@ def initialize_memberships(batch_size, n_points, n_clusters, device):
     Returns:
         memberships: tensor (batch_size, n_points, n_clusters)
     """
-    # Randomly initialize the membership matrix ensuring that the sum over clusters for each point is 1
     memberships = torch.rand(batch_size, n_points, n_clusters, device=device)
     memberships = memberships / memberships.sum(dim=2, keepdim=True)
     return memberships
@@ -75,34 +74,25 @@ def fuzzy_c_means(x, n_clusters, m=2, epsilon=1e-6, max_iter=1000):
     batch_size, num_dims, num_points, _ = x.size()
     x = x.squeeze(-1).transpose(1, 2)  # Shape: (batch_size, num_points, num_dims)
 
-    # Initialize the membership matrix
     memberships = initialize_memberships(batch_size, num_points, n_clusters, x.device)
 
-    # Initialize cluster centers
     centers = torch.zeros(batch_size, num_dims, n_clusters, device=x.device)
     prev_memberships = torch.zeros_like(memberships)
 
     for iteration in range(max_iter):
-        # Update cluster centers
         for cluster in range(n_clusters):
-            # Calculate the denominator
             weights = memberships[:, :, cluster] ** m
             denominator = weights.sum(dim=1, keepdim=True)
-            # Update centers
             numerator = (weights.unsqueeze(2) * x).sum(dim=1)
             centers[:, :, cluster] = numerator / denominator
 
-        # Update memberships
         for cluster in range(n_clusters):
             diff = x - centers[:, :, cluster].unsqueeze(1)
-            dist = torch.norm(diff, p=2, dim=2)  # Euclidean distance
+            dist = torch.norm(diff, p=2, dim=2) 
             memberships[:, :, cluster] = 1.0 / (dist ** (2 / (m - 1)))
 
-        # Normalize the memberships such that each point's memberships across clusters sum to 1
         memberships_sum = memberships.sum(dim=2, keepdim=True)
         memberships = memberships / memberships_sum
-
-        # Check convergence: stop if memberships do not change significantly
         if iteration > 0 and torch.norm(prev_memberships - memberships) < epsilon:
             break
         prev_memberships = memberships.clone()
@@ -134,19 +124,13 @@ def construct_hyperedges(x, num_clusters, threshold=0.5, m=2):
         
         batch_size, num_dims, num_points, _ = x.shape
         
-        # Get memberships and centers using the fuzzy c-means clustering
         memberships, centers = fuzzy_c_means(x, num_clusters, m)
-        
-        # Create hyperedge matrix to represent each hyperedge's points
-        # Initialized with -1s for padding
         hyperedge_matrix = -torch.ones(batch_size, num_clusters, num_points, dtype=torch.long, device=x.device)
         for b in range(batch_size):
             for c in range(num_clusters):
                 idxs = torch.where(memberships[b, :, c] > threshold)[0]
                 hyperedge_matrix[b, c, :len(idxs)] = idxs
         
-        # Create point to hyperedge index to indicate which hyperedges each point belongs to
-        # Initialized with -1s for padding
         max_edges_per_point = (memberships > threshold).sum(dim=-1).max().item()
         point_hyperedge_index = -torch.ones(batch_size, num_points, max_edges_per_point, dtype=torch.long, device=x.device)
         for b in range(batch_size):
@@ -154,7 +138,6 @@ def construct_hyperedges(x, num_clusters, threshold=0.5, m=2):
                 idxs = torch.where(memberships[b, p, :] > threshold)[0]
                 point_hyperedge_index[b, p, :len(idxs)] = idxs
     
-    # Return the three constructed tensors
     return hyperedge_matrix, point_hyperedge_index, centers
 
 
@@ -187,18 +170,16 @@ class ImageToHypergraph(nn.Module):
             point_hyperedge_index: Tensor mapping points to hyperedges
             hyperedge_features: Features of hyperedges (cluster centers)
             patch_positions: Position of each patch in the original image
+            x_embed: Patch Embedding
         """
-        # Apply patch embedding
         x_embed = self.patch_embed(x)
         
-        # Get patch positions
         batch_size, channels, h, w = x_embed.shape
         y_positions = torch.arange(0, h, device=x.device)
         x_positions = torch.arange(0, w, device=x.device)
         y_grid, x_grid = torch.meshgrid(y_positions, x_positions, indexing='ij')
         patch_positions = torch.stack([y_grid.flatten(), x_grid.flatten()], dim=1)
         
-        # Reshape for fuzzy c-means
         x_reshape = x_embed.flatten(2).unsqueeze(-1)  # (B, C, H*W, 1)
         
         # Construct hypergraph
@@ -206,27 +187,7 @@ class ImageToHypergraph(nn.Module):
             x_reshape, self.num_clusters, self.threshold, self.m
         )
         
-        return hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w)
-
-
-def load_and_preprocess_image(image_path, size=(224, 224)):
-    """
-    Load and preprocess an image.
-    
-    Args:
-        image_path: Path to the image file.
-        size: Size to resize the image to.
-        
-    Returns:
-        Preprocessed image tensor.
-    """
-    image = Image.open(image_path).convert('RGB')
-    transform = transforms.Compose([
-        transforms.Resize(size),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    return transform(image).unsqueeze(0)  # Add batch dimension
+        return hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w) , x_embed
 
 
 def visualize_hypergraph_patches(image_path, hyperedge_matrix, patch_positions, h, w, orig_size=(224, 224), output_path=None):
@@ -296,55 +257,6 @@ def visualize_hypergraph_patches(image_path, hyperedge_matrix, patch_positions, 
         plt.show()
     
     plt.close()
-
-
-def process_image(image_path, model, output_path=None, visualize=True):
-    """
-    Process an image with the ImageToHypergraph model.
-    
-    Args:
-        image_path: Path to the input image.
-        model: ImageToHypergraph model.
-        output_path: Path to save visualization.
-        visualize: Whether to visualize the hypergraph.
-        
-    Returns:
-        dict: Dictionary containing hypergraph components.
-    """
-    # Load and preprocess image
-    image_tensor = load_and_preprocess_image(image_path)
-    
-    # Process with model
-    with torch.no_grad():
-        hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w) = model(image_tensor)
-    
-    # Count patches in each hyperedge
-    patch_counts = []
-    for h_idx in range(model.num_clusters):
-        indices = hyperedge_matrix[0, h_idx]
-        count = (indices >= 0).sum().item()
-        patch_counts.append(count)
-        print(f"Hyperedge {h_idx+1} contains {count} patches")
-    
-    # Visualize if requested
-    if visualize:
-        visualize_hypergraph_patches(
-            image_path, 
-            hyperedge_matrix, 
-            patch_positions, 
-            h, w, 
-            output_path=output_path
-        )
-    
-    # Return components
-    return {
-        "hyperedge_matrix": hyperedge_matrix,
-        "point_hyperedge_index": point_hyperedge_index,
-        "hyperedge_features": hyperedge_features,
-        "patch_positions": patch_positions,
-        "feature_shape": (h, w),
-        "patch_counts": patch_counts
-    }
 
 
 

@@ -8,14 +8,8 @@ from torch import optim
 from models import Model_2
 from train_eval import train_model , evaluate_model
 from torch.utils.data import SubsetRandomSampler
-
-
-def create_graph_data(features, labels=None):
-    num_nodes = features.size(0)
-    edge_index = torch.combinations(torch.arange(num_nodes), r=2).t()
-    x = features.clone().detach()
-    y = labels.clone().detach() if labels is not None else None
-    return Data(x=x, edge_index=edge_index, y=y)
+from hyp_model import hyp_model_1
+from sklearn.model_selection import train_test_split
 
 transform_train = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -28,17 +22,16 @@ transform_train = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
+
 transform_val = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-datadir = 'C:/Users/admin/Desktop/DL_sem_4/brain_tumor_dataset'
-train_dataset = ImageFolder(datadir, transform=transform_train)
-val_dataset = ImageFolder(datadir, transform=transform_val)
-
-from sklearn.model_selection import train_test_split
+datadir = 'C:/Users/admin/DL_sem_4/brain_tumor_dataset'
+train_dataset = ImageFolder(datadir , transform = transform_train)
+val_dataset = ImageFolder(datadir , transform= transform_val)
 
 indices = list(range(len(train_dataset)))
 labels = [train_dataset[i][1] for i in indices]
@@ -54,13 +47,20 @@ train_sampler = SubsetRandomSampler(train_indices)
 val_sampler = SubsetRandomSampler(val_indices)
 test_sampler = SubsetRandomSampler(test_indices)
 
-train_loader = DataLoader(train_dataset, batch_size=2, sampler=train_sampler)
-val_loader = DataLoader(val_dataset, batch_size=2, sampler=val_sampler)
+train_loader = DataLoader(train_dataset, batch_size=8, sampler=train_sampler)
+val_loader = DataLoader(val_dataset, batch_size=8, sampler=val_sampler)
 test_loader = DataLoader(val_dataset, batch_size=32, sampler=test_sampler)
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model_3 = Model_2(num_classes=2)
+
+model_4 = hyp_model_1(
+    in_channels=3,  # Dimension of your patch embeddings
+    hidden_channels=96,
+    out_channels=2,  # Number of classes for classification task
+    num_layers=3
+)
 
 
 criterion = nn.CrossEntropyLoss()
@@ -72,7 +72,7 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
 )
 
 
-model , history = train_model(train_loader=train_loader , val_loader=val_loader , model=model_3 , criterion=criterion , optimizer=optimizer , num_epochs=10 , device=device)
+model , history = train_model(train_loader=train_loader , val_loader=val_loader , model=model_4 , criterion=criterion , optimizer=optimizer , num_epochs=10 , device=device)
 
 
 

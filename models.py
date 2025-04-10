@@ -116,17 +116,10 @@ class Model_2(nn.Module):
         super(Model_2, self).__init__()
         self.num_classes = num_classes
         
-        # Patch embedding
         self.patch_embed = PatchEmbed()
-        
-        # Grapher module (operates on spatial data)
-        # Make sure in_channels matches the output channels from patch_embed
-        self.grapher = Grapher(in_channels=embed_dim)  # Adjust channels to match patch_embed output
-        
-        # Positional encoding for transformer
+        self.grapher = Grapher(in_channels=embed_dim)  
         self.laplacian = LaplacianPositionalEncoding(patch_size=4, img_size=224, dim=embed_dim, normalized=True)
         
-        # Transformer blocks
         self.blocks = nn.ModuleList([
             TransformerBlock(embed_dim, num_heads, mlp_ratio, dropout)
             for _ in range(depth)
@@ -141,24 +134,18 @@ class Model_2(nn.Module):
         # 1. Patch embedding [B, C, H, W]
         x = self.patch_embed(x)
         
-        # 2. Apply Grapher while still in spatial format
         x = self.grapher(x)
-        
-        # 3. Reshape to sequence format for transformer
+
         _, C, H, W = x.shape
         x = x.flatten(2).transpose(1, 2)  # [B, N, C]
         
-        # 4. Apply positional encoding
         x = self.laplacian(x)
-        
-        # 5. Process through transformer blocks
+
         for block in self.blocks:
             x = block(x)
         
-        # Use mean pooling instead of CLS token for classification
         x = x.mean(dim=1)  # [B, C]
         
-        # Classification
         x = self.fc(x)
         return x
 
@@ -176,14 +163,6 @@ class Combined_2(nn.Module):
         x = x.mean(dim = [2 , 3])
         x = self.fc(x)
         return x
-    
-class opt(nn.Module):
-    def __init__(self , num_classes , embed_dim = 96 , depth = 12 , num_heads = 4 , mlp_ratio = 4.0 , dropout = 0.1 , gps_layers = 2 , k =4):
-        super(opt , self).__init__()
-        self.num_classes = num_classes
-        self.embed_dim = embed_dim
-        self.path_embed = PatchEmbed()
-        self.laplacian = LaplacianPositionalEncoding(patch_size = 4 , img_size = 224 , dim = embed_dim , normalized = True)
 
         
     
