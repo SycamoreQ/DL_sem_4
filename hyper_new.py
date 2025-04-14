@@ -5,7 +5,7 @@ import torch.optim as optim
 import numpy as np
 from torch_geometric.nn import GPSConv , global_mean_pool , GCNConv , GATConv , SAGEConv
 from functools import partial
-from SHSL.src import hypergraph_learner
+from DeepHypergraph.SHSL.src import hypergraph_learner
 from sklearn.cluster import KMeans
 import numpy as np
 from DeepHypergraph import Hypergraph

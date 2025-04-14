@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import hsv_to_rgb
 import numpy as np
+from torch_geometric.transforms import AddRandomWalkPE
 
 class PatchEmbed(nn.Module):
     """
@@ -155,7 +156,7 @@ class ImageToHypergraph(nn.Module):
             m: Fuzzifier parameter for fuzzy c-means.
         """
         super().__init__()
-        self.patch_embed = PatchEmbed(in_chans=in_chans, in_dim=64, dim=embed_dim)
+        self.RWSE = AddRandomWalkPE(walk_length = 10)
         self.num_clusters = num_clusters
         self.threshold = threshold
         self.m = m
@@ -172,7 +173,7 @@ class ImageToHypergraph(nn.Module):
             patch_positions: Position of each patch in the original image
             x_embed: Patch Embedding
         """
-        x_embed = self.patch_embed(x)
+        x_embed = self.RWSE(x)
         
         batch_size, channels, h, w = x_embed.shape
         y_positions = torch.arange(0, h, device=x.device)
