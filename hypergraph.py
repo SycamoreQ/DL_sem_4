@@ -9,6 +9,7 @@ import matplotlib.patches as mpatches
 from matplotlib.colors import hsv_to_rgb
 import numpy as np
 from torch_geometric.transforms import AddRandomWalkPE
+from sklearn.metrics.pairwise import cosine_distances as cos_dis, euclidean_distances
 
 class PatchEmbed(nn.Module):
     """
@@ -160,6 +161,7 @@ class ImageToHypergraph(nn.Module):
         self.num_clusters = num_clusters
         self.threshold = threshold
         self.m = m
+
         
     def forward(self, x):
         """
@@ -173,7 +175,7 @@ class ImageToHypergraph(nn.Module):
             patch_positions: Position of each patch in the original image
             x_embed: Patch Embedding
         """
-        x_embed = self.RWSE(x)
+        x_embed = self.RWSE(x)   
         
         batch_size, channels, h, w = x_embed.shape
         y_positions = torch.arange(0, h, device=x.device)
@@ -187,8 +189,10 @@ class ImageToHypergraph(nn.Module):
         hyperedge_matrix, point_hyperedge_index, hyperedge_features = construct_hyperedges(
             x_reshape, self.num_clusters, self.threshold, self.m
         )
+
+        memberships, centers = fuzzy_c_means(x, num_clusters = 10 , m = 2)
         
-        return hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w) , x_embed
+        return hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w) , x_embed , centers
 
 
 def visualize_hypergraph_patches(image_path, hyperedge_matrix, patch_positions, h, w, orig_size=(224, 224), output_path=None):
@@ -258,27 +262,4 @@ def visualize_hypergraph_patches(image_path, hyperedge_matrix, patch_positions, 
         plt.show()
     
     plt.close()
-
-
-
-
-
-
-        
-    
-
-
-
-
-
-        
-        
-        
-        
-        
-
-        
-        
-        
-        
 

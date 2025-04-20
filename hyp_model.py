@@ -5,10 +5,7 @@ import torch.optim as optim
 import numpy as np
 from hypergraph import ImageToHypergraph
 from torch_geometric.nn import GPSConv , global_mean_pool , GCNConv , GATConv , SAGEConv
-from models import FeedForward , SelfAttention
-from encoder import PatchEmbed , LaplacianPositionalEncoding , ConditionalPositionEncoding
-from torch_geometric.nn import MessagePassing
-from functools import partial
+from ViHGNN.assets.gcn_lib.torch_vertex import HypergraphConv2d
 
 
 def hypergraph_to_edge_index(hyperedge_matrix, num_points):
@@ -47,14 +44,16 @@ def hypergraph_to_edge_index(hyperedge_matrix, num_points):
 class hyp_model_1(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers=3, num_clusters=10, threshold=0.5, m=2):
         super(hyp_model_1, self).__init__()
+
+        self.hgcn = HypergraphConv2d(in_channels, out_channels , act = 'relu' , norm = None , bias = True)
         
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             self.convs.append(
                 GPSConv(
-                    channels=hidden_channels,  # Use hidden_channels here
+                    channels=hidden_channels,  
                     heads=3,
-                    conv=GCNConv(hidden_channels, hidden_channels),  # Instantiate GCNConv directly
+                    conv=GCNConv(hidden_channels, hidden_channels),  
                     act='relu',
                     norm='layernorm',
                     attn_type='multihead',
@@ -68,11 +67,11 @@ class hyp_model_1(nn.Module):
         self.lin1 = nn.Linear(hidden_channels, hidden_channels)
         self.lin2 = nn.Linear(hidden_channels, out_channels)
         
-    def forward(self, x):  # Removed batch_size argument
+    def forward(self, x): 
         batch_size, channels, h, w = x.shape
 
-        hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w), x_embed = self.hypergraph_model(x)
-
+        hyperedge_matrix, point_hyperedge_index, hyperedge_features, patch_positions, (h, w), x_embed , centers = self.hypergraph_model(x)
+        
         node_features = x_embed.flatten(2).transpose(1, 2)
         num_points = h * w
 
@@ -82,20 +81,19 @@ class hyp_model_1(nn.Module):
             
             features = node_features[b]
 
-            x_conv = features  # Initialize x_conv with features
+            x_conv = features  
             for conv in self.convs:
                 x_conv = conv(x_conv, edge_index)
                 
             if x_conv.dim() > 1 and x_conv.size(0) > 1:
                 x_conv = global_mean_pool(x_conv, torch.zeros(x_conv.size(0), dtype=torch.long, device=x_conv.device))  # Provide batch tensor
             else:
-                x_conv = x_conv.unsqueeze(0)  # Ensure correct dimensions for concatenation
+                x_conv = x_conv.unsqueeze(0)  
             outputs.append(x_conv)
 
 
         x = torch.cat(outputs, dim=0)
     
-        # Apply final layers
         x = F.relu(self.lin1(x))
         x = self.lin2(x)
 
